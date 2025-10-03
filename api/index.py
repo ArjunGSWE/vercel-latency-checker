@@ -1,83 +1,57 @@
-import json
-import pandas as pd
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List
+import pandas as pd
+import numpy as np
+from pathlib import Path
 
-# --- Data Loading ---
+app = FastAPI()
 
-df = pd.read_json(../q-vercel-latency.json)
-
-# -------------------------
-
-
-# --- Pydantic Models ---
-class LatencyRequest(BaseModel):
-    """Defines the expected input JSON body."""
-
-    regions: List[str] = Field(..., example=["emea", "apac"])
-    threshold_ms: int = Field(..., example=180)
-
-
-class RegionMetric(BaseModel):
-    """Defines the expected per-region output structure."""
-
-    region: str
-    avg_latency: float
-    p95_latency: float
-    avg_uptime: float
-    breaches: int
-
-
-# --- FastAPI App ---
-app = FastAPI(title="eShopCo Latency Checker")
-
-# Enable CORS for POST requests from any origin
+# Enable CORS for all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
+# Load the dataset once when the app starts
+# The data file should be in the same directory as this script
+DATA_FILE = Path(__file__).parent / "q-vercel-latency.json"
+df = pd.read_json(DATA_FILE)
 
-@app.post("/metrics", response_model=List[RegionMetric])
-def get_latency_metrics(request_data: LatencyRequest):
-    """
-    Calculates per-region latency and uptime metrics based on a threshold.
-    """
-    # 1. Filter the data by requested regions
-    filtered_df = df[df["region"].isin(request_data.regions)].copy()
 
-    if filtered_df.empty:
-        return []
+@app.get("/")
+async def root():
+    return {"message": "Vercel Latency Analytics API is running."}
+
+
+@app.post("/api/")
+async def get_latency_stats(request: Request):
+    payload = await request.json()
+    regions_to_process = payload.get("regions", [])
+    threshold = payload.get("threshold_ms", 200)
 
     results = []
 
-    # 2. Calculate metrics for each requested region
-    for region in request_data.regions:
-        region_data = filtered_df[filtered_df["region"] == region]
+    for region in regions_to_process:
+        region_df = df[df["region"] == region]
 
-        if region_data.empty:
-            continue
+        if not region_df.empty:
+            avg_latency = round(region_df["latency_ms"].mean(), 2)
+            p95_latency = round(np.percentile(region_df["latency_ms"], 95), 2)
+            avg_uptime = round(region_df["uptime_pct"].mean(), 3)
+            breaches = int(region_df[region_df["latency_ms"] > threshold].shape[0])
 
-        # Metrics Calculation
-        avg_lat = region_data["latency_ms"].mean()
-        p95_lat = region_data["latency_ms"].quantile(0.95)
-        avg_up = region_data["uptime_pct"].mean()
+            results.append(
+                {
+                    "region": region,
+                    "avg_latency": avg_latency,
+                    "p95_latency": p95_latency,
+                    "avg_uptime": avg_uptime,
+                    "breaches": breaches,
+                }
+            )
 
-        # Breaches calculation (count of records above threshold)
-        breaches_count = (region_data["latency_ms"] > request_data.threshold_ms).sum()
-
-        results.append(
-            {
-                "region": region,
-                "avg_latency": round(avg_lat, 2),
-                "p95_latency": round(p95_lat, 2),
-                "avg_uptime": round(avg_up, 2),
-                "breaches": int(breaches_count),
-            }
-        )
-
-    return results
+    return {"regions": results}
