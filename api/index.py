@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import os
 
 app = FastAPI()
 
@@ -16,10 +17,26 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# Load the dataset once when the app starts
-# The data file should be in the same directory as this script
-DATA_FILE = Path(__file__).parent / "q-vercel-latency.json"
-df = pd.read_json(DATA_FILE)
+DATA_FILE = os.path.join(os.getcwd(), "api", "q-vercel-latency.json")
+# OR, if your function bundle's root is the 'api' directory:
+# DATA_FILE = os.path.join(os.getcwd(), "q-vercel-latency.json")
+
+# Let's try the direct reference first, as Vercel typically bundles the function's directory as the root.
+try:
+    # Try the simplest form first, relying on the function's root being the 'api' directory
+    DATA_FILE = Path("q-vercel-latency.json")
+    df = pd.read_json(DATA_FILE)
+except Exception as e:
+    # If that fails, try the os.getcwd() method, assuming the file is *in* the API directory
+    # If your project structure is /api/index.py and /api/q-vercel-latency.json
+    data_path = os.path.join(os.getcwd(), "api", "q-vercel-latency.json")
+    if not os.path.exists(data_path):
+        # Fallback to the structure where the API dir is the root
+        data_path = os.path.join(os.getcwd(), "q-vercel-latency.json")
+
+    # You might want to print the path to Vercel logs to debug:
+    print(f"Attempting to load data from: {data_path}")
+    df = pd.read_json(data_path)
 
 
 @app.get("/")
